@@ -1,0 +1,75 @@
+# =============================================================================
+# Hermes-Pi Factory Guardian — .gitignore
+# =============================================================================
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+*.cover
+.mypy_cache/
+
+# Data and runtime (generated at runtime, not committed)
+data/
+logs/
+
+# Anomaly frames (large binary files)
+*.jpg
+*.jpeg
+*.png
+*.mp4
+*.avi
+
+# Configuration secrets (never commit credentials)
+.env
+.env.local
+.env.production
+*.pem
+*.key
+
+# OS files
+.DS_Store
+.DS_Store?
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Logs
+*.log
+/var/
+
+# systemd
+*.service
+!scripts/*.service
+
+# Backup files
+*.bak
+*.tmp
+*.swp
