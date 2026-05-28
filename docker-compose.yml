@@ -1,0 +1,32 @@
+version: "3.8"
+
+services:
+  factory-guardian:
+    build: .
+    container_name: factory-guardian
+    restart: unless-stopped
+    privileged: true  # Required for GPIO access
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASS=${SMTP_PASS}
+      - HERMES_API_KEY=${HERMES_API_KEY}
+    volumes:
+      - ./config:/app/config:ro
+      - ./hermes_skills:/app/hermes_skills:ro
+      - footage_data:/data/footage
+      - report_data:/data/reports
+    devices:
+      - /dev/gpiomem:/dev/gpiomem
+      - /dev/spidev0.0:/dev/spidev0.0
+      - /dev/spidev0.1:/dev/spidev0.1
+      - /dev/i2c-1:/dev/i2c-1
+    ports:
+      - "8080:8080"  # Dashboard
+    env_file:
+      - .env
+
+volumes:
+  footage_data:
+  report_data:

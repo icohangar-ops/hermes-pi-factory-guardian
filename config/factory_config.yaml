@@ -1,332 +1,221 @@
-# =============================================================================
-# Hermes-Pi Factory Guardian — Main Configuration
-# =============================================================================
-# Edit this file to configure your factory monitoring system.
-# Environment variables in ${VAR} format are resolved at runtime.
-# =============================================================================
+# Factory Guardian Configuration
+# Edit this file to configure your factory monitoring setup
 
-# ── Camera Settings ─────────────────────────────────────────────────────────
+factory:
+  name: "Production Line A"
+  location: "Building 3, Bay 7"
+  timezone: "America/New_York"
+  shift_schedule:
+    day_shift: "06:00-14:00"
+    swing_shift: "14:00-22:00"
+    night_shift: "22:00-06:00"
+
 cameras:
-  cam_01:
-    type: picamera           # "picamera" or "usb"
-    device_id: 0
-    resolution: [1280, 720]  # Width, Height — reduced for Pi performance
-    fps: 10                  # Target frames per second
-    roi_fps: 5              # Process ROIs every Nth frame
+  - id: "cam_01"
+    name: "CNC Area North"
+    type: "rpi_camera_v3"
+    resolution: [1920, 1080]
+    fps: 15
+    night_mode: true
+    recording: true
+    retention_days: 14
+  - id: "cam_02"
+    name: "Loading Dock"
+    type: "usb_webcam"
+    resolution: [1280, 720]
+    fps: 10
+    night_mode: false
+    recording: true
+    retention_days: 7
 
-    # Machines monitored by this camera
-    machines:
-      - id: cnc_machine_1
-        roi: [100, 50, 400, 350]       # [x, y, width, height]
-        type: stoppage
-        motion_threshold: 0.15          # Below this = potentially stopped
-        stoppage_duration_seconds: 45   # Confirm stoppage after N seconds
-
-      - id: cnc_machine_2
-        roi: [520, 50, 400, 350]
-        type: stoppage
-        motion_threshold: 0.12
-        stoppage_duration_seconds: 30
-
-    # Restricted zones monitored by this camera
-    zones:
-      - id: restricted_bay_3
-        roi: [0, 420, 1280, 300]
-        type: intrusion
-        cooldown_seconds: 60            # Don't re-alert within 60s
-
-    # Floor spill/leak detection
-    floor_check:
-      enabled: true
-      roi: [0, 500, 1280, 220]
-      type: spill
-      min_area_pixels: 500
-
-  cam_02:
-    type: usb
-    device_id: 1
-    resolution: [640, 480]
-    fps: 8
-    roi_fps: 4
-
-    machines:
-      - id: conveyor_1
-        roi: [50, 30, 540, 250]
-        type: stoppage
-        motion_threshold: 0.10
-        stoppage_duration_seconds: 20
-
-    zones: []
-    floor_check: null
-
-# ── Sensor Settings ────────────────────────────────────────────────────────
-sensors:
-  mock_mode: false          # Set true for development/testing
-
-  vibration:
-    cnc_machine_1:
-      enabled: true
-      i2c_address: 0x68
-      poll_interval_ms: 500
-      gpio_sda: 2
-      gpio_scl: 3
-    cnc_machine_2:
-      enabled: true
-      i2c_address: 0x69
-      poll_interval_ms: 500
-      gpio_sda: 2
-      gpio_scl: 3
-
-  temperature:
-    cnc_machine_1:
-      enabled: true
-      poll_interval_ms: 5000
-      probe_id: "28-00000abcdef01"
-    cnc_machine_2:
-      enabled: true
-      poll_interval_ms: 5000
-      probe_id: "28-00000abcdef02"
-    cnc_machine_3:
-      enabled: true
-      poll_interval_ms: 5000
-      probe_id: "28-00000abcdef03"
-    conveyor_1:
-      enabled: true
-      poll_interval_ms: 5000
-      probe_id: "28-00000fedcba01"
-
-  current:
-    cnc_machine_1:
-      enabled: true
-      spi_device: "/dev/spidev0.0"
-      adc_channel: 0
-      poll_interval_ms: 1000
-      calibration_offset: 2.5    # ACS712 zero-current voltage
-      sensitivity: 0.066         # V/A for ACS712-30A
-    cnc_machine_2:
-      enabled: true
-      adc_channel: 1
-      poll_interval_ms: 1000
-      calibration_offset: 2.5
-      sensitivity: 0.066
-
-  motion:
-    restricted_bay_3:
-      enabled: true
-      gpio_pin: 17
-      poll_interval_ms: 1000
-
-# ── Machine Definitions ────────────────────────────────────────────────────
 machines:
-  cnc_machine_1:
-    name: "CNC Machine #1"
-    criticality: HIGH             # LOW, MEDIUM, HIGH
-    normal_operating_range:
-      temperature:
-        min: 55.0
-        max: 75.0
-        unit: celsius
+  - id: "cnc_mill_01"
+    name: "CNC Mill Station 1"
+    type: "cnc_mill"
+    nominal_rpm: 3000
+    sensors:
       vibration:
-        min: 1.5
-        max: 3.5
-        unit: g
-      current:
-        min: 8.0
-        max: 16.0
-        unit: amps
-    escalation_minutes: 15       # Escalate WARNING → CRITICAL after N min
-
-  cnc_machine_2:
-    name: "CNC Machine #2"
-    criticality: MEDIUM
-    normal_operating_range:
+        pin: 17
+        spi_bus: 0
+        spi_cs: 0
+        threshold: 2.5
+        unit: "g"
       temperature:
-        min: 50.0
-        max: 70.0
-        unit: celsius
-      vibration:
-        min: 1.2
-        max: 3.0
-        unit: g
+        pin: 4
+        threshold: 75
+        unit: "°C"
       current:
-        min: 7.0
-        max: 15.0
-        unit: amps
-    escalation_minutes: 30
+        pin: 0
+        max_current: 30
+        threshold: 12.0
+        unit: "A"
+    camera: "cam_01"
+    alert_recipients:
+      telegram_groups: ["-1002003004005"]
+      email: ["shift-lead@factory.com"]
 
-  cnc_machine_3:
-    name: "CNC Machine #3"
-    criticality: HIGH
-    normal_operating_range:
+  - id: "cnc_mill_02"
+    name: "CNC Mill Station 2"
+    type: "cnc_mill"
+    nominal_rpm: 3000
+    sensors:
+      vibration:
+        pin: 27
+        spi_bus: 0
+        spi_cs: 1
+        threshold: 2.5
+        unit: "g"
       temperature:
-        min: 55.0
-        max: 75.0
-        unit: celsius
-      vibration:
-        min: 1.5
-        max: 3.5
-        unit: g
+        pin: 4
+        threshold: 75
+        unit: "°C"
       current:
-        min: 8.0
-        max: 16.0
-        unit: amps
-    escalation_minutes: 15
+        pin: 1
+        max_current: 30
+        threshold: 12.0
+        unit: "A"
+    camera: "cam_01"
 
-  conveyor_1:
-    name: "Conveyor Belt #1"
-    criticality: LOW
-    normal_operating_range:
+  - id: "conveyor_a"
+    name: "Main Conveyor"
+    type: "conveyor"
+    nominal_rpm: 60
+    sensors:
+      vibration:
+        pin: 22
+        threshold: 1.0
+        unit: "g"
       temperature:
-        min: 35.0
-        max: 55.0
-        unit: celsius
-      vibration:
-        min: 2.0
-        max: 5.0
-        unit: g
+        pin: 4
+        threshold: 45
+        unit: "°C"
       current:
-        min: 4.0
-        max: 10.0
-        unit: amps
-    escalation_minutes: 60
+        pin: 2
+        max_current: 15
+        threshold: 8.0
+        unit: "A"
+    camera: "cam_02"
 
-# ── Alert Routing Rules ───────────────────────────────────────────────────
+  - id: "press_brake_01"
+    name: "Press Brake Station"
+    type: "press_brake"
+    nominal_rpm: 0
+    sensors:
+      vibration:
+        pin: 23
+        threshold: 3.5
+        unit: "g"
+      temperature:
+        pin: 4
+        threshold: 70
+        unit: "°C"
+      current:
+        pin: 3
+        max_current: 50
+        threshold: 35.0
+        unit: "A"
+    camera: "cam_01"
+
+# Vision monitoring zones (pixel coordinates relative to camera resolution)
+zones:
+  - camera_id: "cam_01"
+    name: "restricted_zone"
+    x1: 0
+    y1: 0
+    x2: 320
+    y2: 360
+    sensitivity: 0.85
+    restricted: true
+    min_contour_area: 200
+  - camera_id: "cam_01"
+    name: "work_area"
+    x1: 320
+    y1: 0
+    x2: 1600
+    y2: 1080
+    sensitivity: 0.6
+    restricted: false
+    min_contour_area: 500
+  - camera_id: "cam_02"
+    name: "entrance"
+    x1: 0
+    y1: 0
+    x2: 640
+    y2: 720
+    sensitivity: 0.7
+    restricted: false
+    min_contour_area: 300
+
+# Alert routing configuration
 alert_routing:
   channels:
     telegram:
       bot_token: "${TELEGRAM_BOT_TOKEN}"
-      chat_id: "${TELEGRAM_CHAT_ID}"
+      shift_groups:
+        day_shift: "${TELEGRAM_DAY_GROUP}"
+        swing_shift: "${TELEGRAM_SWING_GROUP}"
+        night_shift: "${TELEGRAM_NIGHT_GROUP}"
     slack:
       webhook_url: "${SLACK_WEBHOOK_URL}"
-      channel: "#factory-alerts"
     email:
-      smtp_server: "smtp.company.com"
+      smtp_host: "smtp.gmail.com"
       smtp_port: 587
-      use_tls: true
-      sender: "guardian@factory.local"
       recipients:
-        - "factory-ops@company.com"
+        shift_leads: ["shift-lead@factory.com"]
+        engineers: ["maintenance@factory.com", "plant-mgr@factory.com"]
 
-  shifts:
-    morning:
-      start: "06:00"
-      end: "14:00"
-      telegram_chat: "${TELEGRAM_MORNING_CHAT}"
-    afternoon:
-      start: "14:00"
-      end: "22:00"
-      telegram_chat: "${TELEGRAM_AFTERNOON_CHAT}"
-    night:
-      start: "22:00"
-      end: "06:00"
-      telegram_chat: "${TELEGRAM_NIGHT_CHAT}"
-
-  deduplication:
-    window_minutes: 60         # Don't send duplicate alerts within this window
-    max_per_window: 1          # Max alerts per machine per window
+  grouping:
+    merge_window_seconds: 300
+    max_repeats_before_escalation: 3
 
   escalation:
-    warning_to_critical_minutes: 30  # Auto-escalate after N min unacknowledged
+    emergency_buzzer_pin: 23
 
-  rate_limit_per_minute: 10   # Max alerts per channel per minute
-
-# ── Shift Schedule ────────────────────────────────────────────────────────
-shift_report:
-  shifts:
-    morning: { start: "06:00", end: "14:00" }
-    afternoon: { start: "14:00", end: "22:00" }
-    night: { start: "22:00", end: "06:00" }
-
-  delivery:
-    on_shift_change: true
-    channels:
-      - telegram
-      - slack
-      - file
-    file_path: "/data/reports/"
-
-  format:
-    include_sensor_details: true
-    include_learning_updates: true
-    include_images: true
-    max_images: 3
-
-# ── Anomaly Detection ────────────────────────────────────────────────────
+# Anomaly detection settings
 anomaly_detection:
-  ema_alpha: 0.05              # EMA smoothing factor (0=slow, 1=fast)
-  zscore_threshold: 2.5        # Z-score above which = anomaly
-  min_samples: 20              # Samples before baseline is reliable
-  max_history: 10000           # Max values per sensor baseline
-  storage_path: "data/baselines.json"
+  learning_period_hours: 72
+  z_score_thresholds:
+    warning: 2.0
+    critical: 3.0
+    emergency: 4.0
+  correlation_window_minutes: 30
+  rebase_trigger_false_positives: 5
 
-# ── Learning Parameters ──────────────────────────────────────────────────
-learning:
-  baseline_window_days: 7      # Days of data for baseline calculation
-  learning_rate: 0.05          # How fast baselines adapt
-  pattern_detection_window_hours: 168   # 7 days
-  pattern_confidence_threshold: 0.80    # Min confidence for skill generation
-  min_pattern_occurrences: 3           # Min occurrences to confirm pattern
-  storage_dir: "data/learning"
-  initial_false_positive_rate: 0.40    # Expected FPR at deployment
+# Vibration analysis settings
+vibration_baseline:
+  sampling:
+    rate_hz: 3200
+    window_seconds: 2
+    windows_per_average: 5
+  fft:
+    max_frequency_hz: 1600
+    window_function: "hanning"
+  trending:
+    rolling_windows: [7, 14, 30]
 
-  # Auto-analysis schedule
-  analysis_schedule:
-    enabled: true
-    interval_hours: 6         # Run pattern analysis every N hours
+# Camera monitoring settings
+camera_monitor:
+  motion_detection:
+    background_history: 500
+    variance_threshold: 50
+    shadow_detection: true
+  yolo:
+    model: "yolov8n.pt"
+    confidence_threshold: 0.5
+    target_classes: ["person", "truck", "car", "motorcycle", "bus"]
+  archival:
+    clip_before_seconds: 30
+    clip_after_seconds: 120
+    retention_days: 14
+    storage_path: "/data/footage/"
 
-# ── Storage Settings ──────────────────────────────────────────────────────
-storage:
-  data_dir: "/data"
-  anomaly_frames_dir: "/data/anomalies"
-  reports_dir: "/data/reports"
-  max_disk_usage_mb: 4096     # Auto-cleanup when exceeded
-  retention_days: 30
-  image_quality: 85
-
-# ── System Settings ───────────────────────────────────────────────────────
-system:
-  log_level: INFO             # DEBUG, INFO, WARNING, ERROR
-  log_file: "/var/log/hermes-guardian/guardian.log"
-  pid_file: "/var/run/hermes-guardian/guardian.pid"
-  user: "guardian"             # Systemd user
-  group: "gpio"                # GPIO access group
-
-  # Performance
-  max_cpu_percent: 80         # Throttle if CPU exceeds this
-  max_memory_mb: 512          # Max memory usage
-  watchdog_timeout_seconds: 300  # Restart if unresponsive for N seconds
-
-# ── Hermes Agent Integration ─────────────────────────────────────────────
-hermes:
-  install_dir: "/opt/hermes-agent"
-  config_dir: "/etc/hermes-agent"
-  provider: ollama            # "ollama" (local) or "groq" (cloud)
-  model: "llama3"             # Model to use with provider
-  ollama_base_url: "http://localhost:11434"
-
-  # Custom skills to register
-  skills:
-    - name: anomaly_detection
-      path: "skills/anomaly-detection/description.md"
-      enabled: true
-    - name: alert_router
-      path: "skills/alert-router/description.md"
-      enabled: true
-    - name: shift_report
-      path: "skills/shift-report/description.md"
-      enabled: true
-    - name: sensor_polling
-      path: "skills/sensor-polling/description.md"
-      enabled: true
-    - name: vision_monitor
-      path: "skills/vision-monitor/description.md"
-      enabled: true
-    - name: learning_loop
-      path: "skills/learning-loop/description.md"
-      enabled: true
-
-  # Hooks
-  hooks:
-    on_anomaly: "hooks/on_alert.sh"
-    on_shift_change: "hooks/on_shift_change.sh"
-    on_learning: "hooks/on_learning.sh"
+# Shift report settings
+shift_report:
+  schedule:
+    shift_change_report: true
+    daily_summary_hour: 22
+    weekly_digest_day: "monday"
+  delivery:
+    shift_handover: ["telegram", "slack"]
+    daily_summary: ["email"]
+    weekly_digest: ["email", "slack"]
