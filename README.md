@@ -119,7 +119,7 @@ hermes-pi-factory-guardian/
 
 ```bash
 # Clone the repository
-git clone https://github.com/Cubiczan/hermes-pi-factory-guardian.git
+git clone https://github.com/icohangar-ops/hermes-pi-factory-guardian.git
 cd hermes-pi-factory-guardian
 
 # Run Pi setup (installs system dependencies, enables camera)

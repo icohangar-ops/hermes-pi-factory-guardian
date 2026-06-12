@@ -70,7 +70,7 @@ And here's a shift handoff report that Hermes auto-generates at shift change:
 
 ## Code
 
-[GitHub — Cubiczan/hermes-pi-factory-guardian](https://github.com/Cubiczan/hermes-pi-factory-guardian)
+[GitHub — Cubiczan/hermes-pi-factory-guardian](https://github.com/icohangar-ops/hermes-pi-factory-guardian)
 
 The project includes 6 Hermes Agent skills, each as a self-contained Python module:
 
@@ -138,4 +138,4 @@ The fact that Hermes Agent runs locally, respects privacy, and creates its own s
 
 ---
 
-*Built with [Hermes Agent](https://github.com/nousresearch/hermes-agent) by Nous Research. Code available on [GitHub](https://github.com/Cubiczan/hermes-pi-factory-guardian).*
+*Built with [Hermes Agent](https://github.com/nousresearch/hermes-agent) by Nous Research. Code available on [GitHub](https://github.com/icohangar-ops/hermes-pi-factory-guardian).*

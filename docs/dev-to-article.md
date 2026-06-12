@@ -8,7 +8,7 @@ published: false
 
 # Hermes-Pi Factory Guardian: Self-Learning AI Surveillance for Industrial Monitoring
 
-![Hermes-Pi Factory Guardian Dashboard](https://github.com/Cubiczan/hermes-pi-factory-guardian/raw/main/docs/media/hermes-pi-factory-guardian.png)
+![Hermes-Pi Factory Guardian Dashboard](https://github.com/icohangar-ops/hermes-pi-factory-guardian/raw/main/docs/media/hermes-pi-factory-guardian.png)
 
 ## The Problem: Factory Monitoring Is Broken
 
@@ -164,7 +164,7 @@ The system deploys via Docker on the Pi:
 
 ```bash
 # Flash Raspberry Pi OS, then:
-git clone https://github.com/Cubiczan/hermes-pi-factory-guardian.git
+git clone https://github.com/icohangar-ops/hermes-pi-factory-guardian.git
 cd hermes-pi-factory-guardian
 bash scripts/setup_pi.sh          # Configure GPIO, load kernel modules
 cp .env.example .env             # Add your Telegram bot token, etc.
@@ -194,7 +194,7 @@ The setup script handles enabling camera, SPI, I2C, and 1-Wire interfaces on the
 
 All code, skills, configuration, and documentation are available at:
 
-**[github.com/Cubiczan/hermes-pi-factory-guardian](https://github.com/Cubiczan/hermes-pi-factory-guardian)**
+**[github.com/Cubiczan/hermes-pi-factory-guardian](https://github.com/icohangar-ops/hermes-pi-factory-guardian)**
 
 The repository includes:
 - 5 production-ready Hermes skills with detailed documentation
