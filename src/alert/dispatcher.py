@@ -14,7 +14,49 @@ from typing import List, Optional, Dict, Callable
 from datetime import datetime, timedelta
 from enum import Enum
 
+from cubiczan_resilience import resilient, atomic_write
+
 logger = logging.getLogger(__name__)
+
+# Local dead-letter file for CRITICAL alerts that could not be delivered.
+DEAD_LETTER_PATH = os.environ.get(
+    "ALERT_DEAD_LETTER_PATH",
+    os.path.join("data", "alert_dead_letter.jsonl"),
+)
+
+
+def _persist_dead_letter(channel: str, event: "AlertEvent") -> None:
+    """Append an un-deliverable CRITICAL alert to the local dead-letter file.
+
+    Existing entries are preserved; the file is rewritten atomically so a
+    crash mid-write can never corrupt prior dead letters.
+    """
+    record = {
+        "channel": channel,
+        "alert_id": event.alert_id,
+        "severity": event.severity.value,
+        "machine_id": event.machine_id,
+        "description": event.description,
+        "source": event.source,
+        "timestamp": event.timestamp.isoformat(),
+        "failed_at": datetime.utcnow().isoformat(),
+    }
+    try:
+        existing = ""
+        if os.path.exists(DEAD_LETTER_PATH):
+            with open(DEAD_LETTER_PATH, "r") as f:
+                existing = f.read()
+        parent = os.path.dirname(DEAD_LETTER_PATH)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        atomic_write(DEAD_LETTER_PATH, existing + json.dumps(record) + "\n")
+        logger.error(
+            "CRITICAL alert %s persisted to dead-letter (%s undeliverable)",
+            event.alert_id, channel,
+        )
+    except Exception as e:
+        logger.error("Failed to persist dead-letter for %s: %s",
+                     event.alert_id, e)
 
 
 class AlertSeverity(Enum):
@@ -93,24 +135,34 @@ class TelegramNotifier:
         )
 
         try:
-            import urllib.request
-            url = f"{self.base_url}/sendMessage"
-            payload = json.dumps({
-                "chat_id": chat_id,
-                "text": message,
-                "parse_mode": "HTML",
-            }).encode()
-
-            req = urllib.request.Request(url, data=payload, method="POST")
-            req.add_header("Content-Type", "application/json")
-            urllib.request.urlopen(req, timeout=10)
-
+            self._post(chat_id, message)
             logger.info("Telegram alert sent to %s: %s", chat_id,
                         event.description[:50])
             return True
         except Exception as e:
-            logger.error("Telegram send failed: %s", e)
+            logger.error("Telegram send failed after retries: %s", e)
+            if event.severity == AlertSeverity.CRITICAL:
+                _persist_dead_letter("telegram", event)
             return False
+
+    @resilient(timeout=10, max_attempts=3, base_delay=1.0)
+    def _post(self, chat_id: str, message: str) -> None:
+        """POST a message to the Telegram Bot API.
+
+        Wrapped with @resilient so transient network failures are retried
+        with exponential backoff (1s/2s/4s) before propagating.
+        """
+        import urllib.request
+        url = f"{self.base_url}/sendMessage"
+        payload = json.dumps({
+            "chat_id": chat_id,
+            "text": message,
+            "parse_mode": "HTML",
+        }).encode()
+
+        req = urllib.request.Request(url, data=payload, method="POST")
+        req.add_header("Content-Type", "application/json")
+        urllib.request.urlopen(req, timeout=10)
 
 
 class SlackNotifier:
@@ -167,17 +219,27 @@ class SlackNotifier:
         }
 
         try:
-            import urllib.request
-            data = json.dumps(payload).encode()
-            req = urllib.request.Request(self.webhook_url, data=data, method="POST")
-            req.add_header("Content-Type", "application/json")
-            urllib.request.urlopen(req, timeout=10)
-
+            self._post(payload)
             logger.info("Slack alert sent: %s", event.description[:50])
             return True
         except Exception as e:
-            logger.error("Slack send failed: %s", e)
+            logger.error("Slack send failed after retries: %s", e)
+            if event.severity == AlertSeverity.CRITICAL:
+                _persist_dead_letter("slack", event)
             return False
+
+    @resilient(timeout=10, max_attempts=3, base_delay=1.0)
+    def _post(self, payload: dict) -> None:
+        """POST a payload to the Slack webhook.
+
+        Wrapped with @resilient so transient network failures are retried
+        with exponential backoff (1s/2s/4s) before propagating.
+        """
+        import urllib.request
+        data = json.dumps(payload).encode()
+        req = urllib.request.Request(self.webhook_url, data=data, method="POST")
+        req.add_header("Content-Type", "application/json")
+        urllib.request.urlopen(req, timeout=10)
 
 
 class EmailNotifier:
