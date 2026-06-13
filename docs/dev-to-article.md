@@ -194,7 +194,7 @@ The setup script handles enabling camera, SPI, I2C, and 1-Wire interfaces on the
 
 All code, skills, configuration, and documentation are available at:
 
-**[github.com/Cubiczan/hermes-pi-factory-guardian](https://github.com/icohangar-ops/hermes-pi-factory-guardian)**
+**[github.com/icohangar-ops/hermes-pi-factory-guardian](https://github.com/icohangar-ops/hermes-pi-factory-guardian)**
 
 The repository includes:
 - 5 production-ready Hermes skills with detailed documentation
