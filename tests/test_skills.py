@@ -228,7 +228,8 @@ class TestSkillFiles(unittest.TestCase):
 
         for filename in os.listdir(skills_dir):
             if filename.endswith(".skill.md"):
-                with open(os.path.join(skills_dir, filename)) as f:
+                with open(os.path.join(skills_dir, filename),
+                          encoding="utf-8") as f:
                     content = f.read()
                 self.assertTrue(
                     content.startswith("---"),
