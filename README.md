@@ -95,9 +95,12 @@ hermes-pi-factory-guardian/
 ├── config/
 │   └── factory_config.yaml     # Machine profiles and thresholds
 ├── scripts/
-│   ├── setup_pi.sh             # Raspberry Pi setup script
-│   └── install_deps.sh         # Dependency installation
+│   ├── setup_pi.sh             # Raspberry Pi system setup script
+│   ├── setup.sh                # Project setup script
+│   └── install_hermes.sh       # Hermes Agent installation
 ├── tests/
+│   ├── test_alert_router.py
+│   ├── test_anomaly_detector.py
 │   └── test_skills.py
 ├── Dockerfile
 ├── docker-compose.yml
