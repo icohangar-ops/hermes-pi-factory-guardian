@@ -177,11 +177,11 @@ machines:
     sensors:
       vibration: { pin: 17, threshold: 2.5 }
       temperature: { pin: 4, threshold: 75 }
-      current: { pin: 27, threshold: 12.0 }
+      current: { pin: 0, threshold: 12.0 }
     camera: "cam_01"
     alert_recipients:
-      telegram: "-1001234567890"
-      email: "shift-lead@factory.com"
+      telegram_groups: ["-1002003004005"]
+      email: ["shift-lead@factory.com"]
 ```
 
 ## Technology Stack
