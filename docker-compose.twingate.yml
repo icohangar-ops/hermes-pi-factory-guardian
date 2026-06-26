@@ -1,0 +1,143 @@
+# =============================================================================
+# docker-compose.twingate.yml
+# -----------------------------------------------------------------------------
+# Overlay for hermes-pi-factory-guardian that adds a Twingate Connector to the
+# existing `factory-guardian` stack. Apply it alongside the base file:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.twingate.yml up -d
+#
+# What this overlay does:
+#   1. Adds a `twingate-connector` service that registers the Pi (and the
+#      factory LAN it sits on) as a Twingate Remote Network. The Connector
+#      makes outbound-only TLS connections to the Twingate Controller — no
+#      inbound firewall holes, no port forwarding on the OT segment.
+#   2. Joins `factory-guardian` and the Connector to a dedicated `ot_net`
+#      bridge so the Connector can reach the guardian's dashboard by service
+#      name (factory-guardian:8080) without exposing 8080 on the host LAN.
+#   3. Adds `extra_hosts: host-gateway` to the Connector so it can also reach
+#      physical OT devices on the factory LAN (cameras, PLCs, the Pi's own
+#      GPIO-bound services) by IP/FQDN — required for Twingate Resources that
+#      are not Docker containers.
+#   4. Labels the Connector with factory/line identity so it shows up
+#      correctly in the Twingate Admin Console.
+#
+# Credentials come from .env (see .env.twingate.example). Generate the tokens
+# in the Twingate Admin Console: Connectors > Add Connector > Docker Compose.
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # Extend the existing factory-guardian service: join the OT bridge network
+  # so the Connector can reach it by name. Base service config (privileged,
+  # GPIO devices, volumes, ports) is inherited unchanged from docker-compose.yml.
+  # ---------------------------------------------------------------------------
+  factory-guardian:
+    networks:
+      - ot_net
+    labels:
+      - "org.icohangar.factory=${FACTORY_NAME}"
+      - "org.icohangar.line=${FACTORY_LINE}"
+      - "org.icohangar.role=hermes-agent"
+
+  # ---------------------------------------------------------------------------
+  # Twingate Connector
+  #   Image:       twingate/connector:latest  (pin to :1 for reproducibility)
+  #   Restart:     unless-stopped             (matches the guardian's policy)
+  #   Pull policy: always                     (recommended by Twingate docs)
+  #
+  # The sysctl `net.ipv4.ping_group_range` is required when running in bridge
+  # networking mode so the Connector can issue ICMP health checks against
+  # Resources. If you switch this service to `network_mode: host` (see note
+  # below), REMOVE the `sysctls:` block per Twingate's documentation.
+  # ---------------------------------------------------------------------------
+  twingate-connector:
+    image: twingate/connector:latest
+    container_name: twingate-connector-${FACTORY_NAME}-${FACTORY_LINE}
+    restart: unless-stopped
+    pull_policy: always
+    sysctls:
+      - net.ipv4.ping_group_range=0 2147483647
+    environment:
+      # --- Required (generate in Twingate Admin Console) ---
+      - TWINGATE_NETWORK=${TWINGATE_NETWORK}
+      - TWINGATE_ACCESS_TOKEN=${TWINGATE_ACCESS_TOKEN}
+      - TWINGATE_REFRESH_TOKEN=${TWINGATE_REFRESH_TOKEN}
+
+      # --- Recommended ---
+      - TWINGATE_LOG_LEVEL=${TWINGATE_LOG_LEVEL:-3}
+      - TWINGATE_LOG_ANALYTICS=${TWINGATE_LOG_ANALYTICS:-v2}
+      - TWINGATE_LABEL_HOSTNAME=${TWINGATE_LABEL_HOSTNAME:-${FACTORY_NAME}-${FACTORY_LINE}-pi}
+
+      # --- Optional: route Connector DNS through a site resolver so it can
+      #     resolve *.factory.local names registered as Twingate Resources ---
+      - TWINGATE_DNS=${TWINGATE_DNS:-}
+
+      # --- Optional: pass factory/line as Connector labels so the Admin
+      #     Console groups Connectors by site automatically ---
+      - TWINGATE_LABEL_FACTORY=${FACTORY_NAME}
+      - TWINGATE_LABEL_LINE=${FACTORY_LINE}
+    extra_hosts:
+      # Lets the Connector reach the Pi's host LAN (physical cameras, PLCs,
+      # the guardian's host-bound 8080 if you keep it published) by IP.
+      - "host.docker.internal:host-gateway"
+    networks:
+      - ot_net
+    # Connector has NO inbound ports. Do not add a `ports:` block.
+    # Health: Twingate reports container health to the Controller; the
+    # Controller will mark the Connector offline if the container dies.
+    # If you want a local healthcheck, ping the guardian's dashboard:
+    # healthcheck:
+    #   test: ["CMD", "curl", "-fsS", "http://factory-guardian:8080/healthz"]
+    #   interval: 30s
+    #   timeout: 5s
+    #   retries: 3
+    labels:
+      - "org.icohangar.factory=${FACTORY_NAME}"
+      - "org.icohangar.line=${FACTORY_LINE}"
+      - "org.icohangar.role=twingate-connector"
+
+  # ---------------------------------------------------------------------------
+  # Optional: Twingate Client in Linux Headless Mode
+  #   Runs on the Pi itself (as a container) so the guardian's outbound sync
+  #   traffic — Hermes skill store, S3 archive of footage, Slack/Telegram
+  #   webhooks — is identity-bound through Twingate instead of going over the
+  #   flat factory LAN. Auth as a Service Account, not a user.
+  #
+  #   Uncomment to enable. Requires a Service Account in the Twingate Admin
+  #   Console (Team > Service Accounts > Add). The client uses the same .env
+  #   values for TWINGATE_NETWORK; the Service Account token is separate.
+  # ---------------------------------------------------------------------------
+  # twingate-client-headless:
+  #   image: twingate/client:latest
+  #   container_name: twingate-client-${FACTORY_NAME}-${FACTORY_LINE}
+  #   restart: unless-stopped
+  #   pull_policy: always
+  #   network_mode: host           # Client needs host network to redirect traffic
+  #   cap_add:
+  #     - NET_ADMIN
+  #   environment:
+  #     - TWINGATE_NETWORK=${TWINGATE_NETWORK}
+  #     - TWINGATE_CLIENT_SERVICE_ACCOUNT_KEY=${TWINGATE_CLIENT_SERVICE_ACCOUNT_KEY}
+  #     - TWINGATE_CLIENT_DEVICE_NAME=${FACTORY_NAME}-${FACTORY_LINE}-pi-sync
+  #   env_file:
+  #     - .env
+
+# =============================================================================
+# Networks
+#   `ot_net` is a user-defined bridge so the guardian and the Connector can
+#   talk to each other by service name without exposing 8080 on the host LAN.
+#   The Connector additionally reaches the host LAN via `extra_hosts` above.
+#
+#   ALTERNATIVE — full OT LAN access for the Connector:
+#     Remove `networks:` from twingate-connector and add `network_mode: host`.
+#     Then ALSO remove the `sysctls:` block (per Twingate docs). Use this if
+#     your factory Resources live on multiple VLANs the bridge can't route to.
+# =============================================================================
+networks:
+  ot_net:
+    name: ot_net_${FACTORY_NAME}_${FACTORY_LINE}
+    driver: bridge
+    labels:
+      - "org.icohangar.segment=ot"
+      - "org.icohangar.factory=${FACTORY_NAME}"
+      - "org.icohangar.line=${FACTORY_LINE}"

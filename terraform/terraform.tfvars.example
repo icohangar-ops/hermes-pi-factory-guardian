@@ -1,0 +1,6 @@
+# Copy to terraform.tfvars and fill in real values.
+
+twingate_api_token = "REDACTED-GENERATE-IN-ADMIN-CONSOLE"
+twingate_network   = "TWINGATE_NETWORK"
+factory_name       = "factory-a"
+factory_line       = "line-1"

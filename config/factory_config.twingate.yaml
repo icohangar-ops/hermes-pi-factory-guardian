@@ -1,0 +1,511 @@
+# =============================================================================
+# Factory Guardian Configuration — Twingate-extended schema
+# -----------------------------------------------------------------------------
+# Drop-in replacement for config/factory_config.yaml in hermes-pi-factory-guardian.
+# Adds:
+#   - A top-level `twingate:` block for network-wide settings (Remote Network,
+#     Connector identity, posture checks, audit export, egress allowlist).
+#   - A `twingate:` sub-block on every `machines[]` and `cameras[]` entry that
+#     declares that asset as a Twingate Resource with tags, policy bindings,
+#     and JIT access windows that mirror the existing shift_schedule.
+#
+# All Twingate-specific keys are namespaced under `twingate:` so existing
+# Hermes skills (anomaly_detection, alert_routing, camera_monitor,
+# vibration_baseline, shift_report) consume them as opaque metadata — no
+# skill code changes required to keep the system running. Skills that want to
+# emit access-layer events (e.g. "operator X viewed cam_01 footage at 03:14")
+# can opt-in by reading the `twingate.resource_name` field off the machine
+# or camera they are processing.
+#
+# Convention:
+#   Tags use lowercase kebab-case. Tag keys `factory`, `line`, `machine-id`,
+#   `machine-type`, `zone`, and `classification` are reserved — the
+#   `twingate-policyforge` skill (see bottom of file) relies on them to
+#   bind Resource Policies automatically.
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Network-wide Twingate configuration
+# ---------------------------------------------------------------------------
+twingate:
+
+  # The Twingate network slug. For network <name>.twingate.com this is <name>.
+  # Must match TWINGATE_NETWORK in .env. Read-only here for documentation.
+  network: "${TWINGATE_NETWORK}"
+
+  # Logical name of the Remote Network this Pi's factory LAN is registered as
+  # in the Twingate Admin Console. One Remote Network per physical site.
+  remote_network: "factory-${FACTORY_NAME}-line-${FACTORY_LINE}"
+
+  # Connector identity. The container_name in docker-compose.twingate.yml is
+  # derived from these. Two Connectors per Remote Network is the Twingate
+  # documented minimum for failover; list them both so the shift_report
+  # skill can include Connector health in the daily summary.
+  connectors:
+    - name: "connector-${FACTORY_NAME}-${FACTORY_LINE}-a"
+      labels:
+        factory: "${FACTORY_NAME}"
+        line: "${FACTORY_LINE}"
+        role: "primary"
+    - name: "connector-${FACTORY_NAME}-${FACTORY_LINE}-b"
+      labels:
+        factory: "${FACTORY_NAME}"
+        line: "${FACTORY_LINE}"
+        role: "failover"
+
+  # Identity Provider used for human access to this Remote Network's Resources.
+  # The Controller delegates auth to this IdP; SCIM keeps the user list in sync.
+  identity_provider:
+    type: "okta"            # okta | entra-id | google-workspace | jumpcloud | keycloak | onelogin
+    scim_enabled: true
+    groups:
+      shift_leads:   "factory-${FACTORY_NAME}-shift-leads"
+      maintenance:   "factory-${FACTORY_NAME}-maintenance"
+      contractors:   "factory-${FACTORY_NAME}-contractors"
+      plant_managers: "factory-${FACTORY_NAME}-plant-managers"
+
+  # Device Posture Checks applied to every human Client connecting to this
+  # Remote Network. Pairs with the repo's existing "context-aware escalation"
+  # philosophy: if a device fails posture, the alert_routing skill can be
+  # configured to surface the failure as a security incident, not just a
+  # connection refusal.
+  device_posture_checks:
+    - name: "edr-running"
+      type: "crowdstrike"           # crowdstrike | sentinelone | jamf | intune | 1password-xam
+      require_running: true
+    - name: "os-patched-within-30d"
+      type: "os-version"
+      max_age_days: 30
+    - name: "disk-encryption-on"
+      type: "disk_encryption"
+      require_enabled: true
+    - name: "site-geo-only"
+      type: "location"
+      allowed_countries: ["US", "CA"]
+      block_unknown: true
+
+  # Just-In-Time access windows. These mirror factory.shift_schedule so an
+  # operator can only reach a Resource during their shift, with no standing
+  # privilege between shifts. Auto-lock fires at shift end.
+  jit_access:
+    enabled: true
+    approval_mode: "auto"          # auto | manual | manual-with-escalation
+    auto_lock:
+      on_shift_end: true
+      idle_minutes: 60             # Twingate usage-based auto-lock
+    windows:
+      day_shift:   "06:00-14:00"
+      swing_shift: "14:00-22:00"
+      night_shift: "22:00-06:00"
+    timezone: "${SHIFT_TIMEZONE}"
+
+  # Audit pipeline. Twingate Audit Logs + Network Events are exported to S3
+  # and joined with the Hermes shift_report so the daily summary answers
+  # "who accessed which machine's Pi during this shift, and what anomalies
+  # were observed during that window".
+  audit:
+    export_to_s3: true
+    s3_bucket: "factory-${FACTORY_NAME}-twingate-audit"
+    s3_prefix: "line-${FACTORY_LINE}/"
+    region: "${AWS_REGION}"
+    retention_days: 365
+    include_network_events: true     # per-connection flow records
+    include_admin_console_events: true
+
+  # Internet Security / egress allowlist for the alert dispatcher. The repo's
+  # alert_routing skill pushes to Telegram / Slack / email; this constrains
+  # the Pi's egress to exactly those destinations and logs violations as
+  # security incidents.
+  egress_allowlist:
+    default_action: "block_and_log"   # block | block_and_log | allow
+    entries:
+      - host: "api.telegram.org"
+        port: 443
+        reason: "telegram-bot-alerts"
+      - host: "hooks.slack.com"
+        port: 443
+        reason: "slack-webhook-alerts"
+      - host: "smtp.gmail.com"
+        port: 587
+        reason: "email-alerts"
+      - host: "${HERMES_SKILL_STORE_HOST}"
+        port: 443
+        reason: "hermes-skill-sync"
+      - host: "s3.${AWS_REGION}.amazonaws.com"
+        port: 443
+        reason: "footage-archive"
+
+# ---------------------------------------------------------------------------
+# Factory (unchanged from base schema, repeated for context)
+# ---------------------------------------------------------------------------
+factory:
+  name: "Production Line A"
+  location: "Building 3, Bay 7"
+  timezone: "America/New_York"
+  shift_schedule:
+    day_shift: "06:00-14:00"
+    swing_shift: "14:00-22:00"
+    night_shift: "22:00-06:00"
+
+# ---------------------------------------------------------------------------
+# Cameras — each camera is registered as a Twingate Resource so footage
+# review and PTZ control are gated by identity + posture + JIT.
+# ---------------------------------------------------------------------------
+cameras:
+  - id: "cam_01"
+    name: "CNC Area North"
+    type: "rpi_camera_v3"
+    resolution: [1920, 1080]
+    fps: 15
+    night_mode: true
+    recording: true
+    retention_days: 14
+    twingate:
+      resource_name: "cam-01.factory-a.local"
+      address: "192.168.10.21"          # camera's LAN IP / FQDN
+      protocol: "rtsp"                  # rtsp | http | onvif
+      port: 554
+      tags:
+        factory: "${FACTORY_NAME}"
+        line: "${FACTORY_LINE}"
+        zone: "cnc-north"
+        classification: "restricted"    # restricted | internal | public
+      policy: "policy-restricted-footage"
+      jit_access:
+        allowed_groups: ["shift_leads", "plant_managers"]
+        allow_contractors: false
+        max_session_minutes: 60
+
+  - id: "cam_02"
+    name: "Loading Dock"
+    type: "usb_webcam"
+    resolution: [1280, 720]
+    fps: 10
+    night_mode: false
+    recording: true
+    retention_days: 7
+    twingate:
+      resource_name: "cam-02.factory-a.local"
+      address: "192.168.10.22"
+      protocol: "rtsp"
+      port: 554
+      tags:
+        factory: "${FACTORY_NAME}"
+        line: "${FACTORY_LINE}"
+        zone: "loading-dock"
+        classification: "internal"
+      policy: "policy-internal-footage"
+      jit_access:
+        allowed_groups: ["shift_leads", "maintenance", "contractors"]
+        allow_contractors: true
+        max_session_minutes: 120
+
+# ---------------------------------------------------------------------------
+# Machines — each machine's Pi-facing endpoint (Hermes dashboard, GPIO API,
+# shift report endpoint) is registered as a Twingate Resource. Per-machine
+# tags drive per-machine Resource Policies.
+# ---------------------------------------------------------------------------
+machines:
+  - id: "cnc_mill_01"
+    name: "CNC Mill Station 1"
+    type: "cnc_mill"
+    nominal_rpm: 3000
+    sensors:
+      vibration:
+        pin: 17
+        spi_bus: 0
+        spi_cs: 0
+        threshold: 2.5
+        unit: "g"
+      temperature:
+        pin: 4
+        threshold: 75
+        unit: "°C"
+      current:
+        pin: 0
+        max_current: 30
+        threshold: 12.0
+        unit: "A"
+    camera: "cam_01"
+    alert_recipients:
+      telegram_groups: ["-1002003004005"]
+      email: ["shift-lead@factory.com"]
+    twingate:
+      # The Pi endpoint exposed for this machine. If the guardian runs one
+      # HTTP server per machine on a different port, list each as a Resource.
+      resource_name: "cnc-mill-01-guardian.factory-a.local"
+      address: "factory-guardian:8080"      # service name on ot_net, or Pi LAN IP
+      protocol: "http"
+      port: 8080
+      tags:
+        factory: "${FACTORY_NAME}"
+        line: "${FACTORY_LINE}"
+        machine-id: "cnc_mill_01"
+        machine-type: "cnc_mill"
+        classification: "restricted"
+      policy: "policy-machine-restricted"
+      jit_access:
+        allowed_groups: ["shift_leads", "maintenance"]
+        allow_contractors: false
+        windows: ["day_shift", "swing_shift"]   # night shift: no access
+        max_session_minutes: 240
+      # Sub-resources: additional endpoints on the same Pi that should be
+      # separately gated (e.g. raw GPIO write API, footage download).
+      sub_resources:
+        - name: "cnc-mill-01-gpio-write"
+          path: "/api/gpio/write"
+          policy: "policy-machine-gpio-write"
+          require_mfa: true
+        - name: "cnc-mill-01-footage-download"
+          path: "/api/footage/download"
+          policy: "policy-footage-download"
+          allowed_groups: ["plant_managers"]
+
+  - id: "cnc_mill_02"
+    name: "CNC Mill Station 2"
+    type: "cnc_mill"
+    nominal_rpm: 3000
+    sensors:
+      vibration:
+        pin: 27
+        spi_bus: 0
+        spi_cs: 1
+        threshold: 2.5
+        unit: "g"
+      temperature:
+        pin: 4
+        threshold: 75
+        unit: "°C"
+      current:
+        pin: 1
+        max_current: 30
+        threshold: 12.0
+        unit: "A"
+    camera: "cam_01"
+    twingate:
+      resource_name: "cnc-mill-02-guardian.factory-a.local"
+      address: "factory-guardian:8080"
+      protocol: "http"
+      port: 8080
+      tags:
+        factory: "${FACTORY_NAME}"
+        line: "${FACTORY_LINE}"
+        machine-id: "cnc_mill_02"
+        machine-type: "cnc_mill"
+        classification: "restricted"
+      policy: "policy-machine-restricted"
+      jit_access:
+        allowed_groups: ["shift_leads", "maintenance"]
+        allow_contractors: false
+        windows: ["day_shift", "swing_shift"]
+        max_session_minutes: 240
+
+  - id: "conveyor_a"
+    name: "Main Conveyor"
+    type: "conveyor"
+    nominal_rpm: 60
+    sensors:
+      vibration:
+        pin: 22
+        threshold: 1.0
+        unit: "g"
+      temperature:
+        pin: 4
+        threshold: 45
+        unit: "°C"
+      current:
+        pin: 2
+        max_current: 15
+        threshold: 8.0
+        unit: "A"
+    camera: "cam_02"
+    twingate:
+      resource_name: "conveyor-a-guardian.factory-a.local"
+      address: "factory-guardian:8080"
+      protocol: "http"
+      port: 8080
+      tags:
+        factory: "${FACTORY_NAME}"
+        line: "${FACTORY_LINE}"
+        machine-id: "conveyor_a"
+        machine-type: "conveyor"
+        classification: "internal"
+      policy: "policy-machine-internal"
+      jit_access:
+        allowed_groups: ["shift_leads", "maintenance", "contractors"]
+        allow_contractors: true
+        windows: ["day_shift", "swing_shift", "night_shift"]
+        max_session_minutes: 480
+
+  - id: "press_brake_01"
+    name: "Press Brake Station"
+    type: "press_brake"
+    nominal_rpm: 0
+    sensors:
+      vibration:
+        pin: 23
+        threshold: 3.5
+        unit: "g"
+      temperature:
+        pin: 4
+        threshold: 70
+        unit: "°C"
+      current:
+        pin: 3
+        max_current: 50
+        threshold: 35.0
+        unit: "A"
+    camera: "cam_01"
+    twingate:
+      # Press brake is high-risk: MFA required for every session, even for
+      # shift leads, and contractors are never allowed.
+      resource_name: "press-brake-01-guardian.factory-a.local"
+      address: "factory-guardian:8080"
+      protocol: "http"
+      port: 8080
+      tags:
+        factory: "${FACTORY_NAME}"
+        line: "${FACTORY_LINE}"
+        machine-id: "press_brake_01"
+        machine-type: "press_brake"
+        classification: "restricted"
+        risk: "high"
+      policy: "policy-machine-press-brake"
+      jit_access:
+        allowed_groups: ["shift_leads", "maintenance"]
+        allow_contractors: false
+        windows: ["day_shift"]              # press brake operated day shift only
+        max_session_minutes: 120
+        require_mfa: true                   # native MFA at the Twingate layer
+        require_posture: ["edr-running", "os-patched-within-30d", "disk-encryption-on"]
+
+# ---------------------------------------------------------------------------
+# Vision monitoring zones (unchanged from base schema)
+# ---------------------------------------------------------------------------
+zones:
+  - camera_id: "cam_01"
+    name: "restricted_zone"
+    x1: 0
+    y1: 0
+    x2: 320
+    y2: 360
+    sensitivity: 0.85
+    restricted: true
+    min_contour_area: 200
+  - camera_id: "cam_01"
+    name: "work_area"
+    x1: 320
+    y1: 0
+    x2: 1600
+    y2: 1080
+    sensitivity: 0.6
+    restricted: false
+    min_contour_area: 500
+  - camera_id: "cam_02"
+    name: "entrance"
+    x1: 0
+    y1: 0
+    x2: 640
+    y2: 720
+    sensitivity: 0.7
+    restricted: false
+    min_contour_area: 300
+
+# ---------------------------------------------------------------------------
+# Alert routing (unchanged from base schema)
+# ---------------------------------------------------------------------------
+alert_routing:
+  channels:
+    telegram:
+      bot_token: "${TELEGRAM_BOT_TOKEN}"
+      shift_groups:
+        day_shift: "${TELEGRAM_DAY_GROUP}"
+        swing_shift: "${TELEGRAM_SWING_GROUP}"
+        night_shift: "${TELEGRAM_NIGHT_GROUP}"
+    slack:
+      webhook_url: "${SLACK_WEBHOOK_URL}"
+    email:
+      smtp_host: "smtp.gmail.com"
+      smtp_port: 587
+      recipients:
+        shift_leads: ["shift-lead@factory.com"]
+        engineers: ["maintenance@factory.com", "plant-mgr@factory.com"]
+  grouping:
+    merge_window_seconds: 300
+    max_repeats_before_escalation: 3
+  escalation:
+    emergency_buzzer_pin: 23
+  # NEW: surface Twingate access-layer events alongside sensor anomalies so
+  # the same dispatcher handles "bearing wear detected" and "contractor
+  # denied access to press_brake_01 outside JIT window".
+  twingate_event_source:
+    # Opt-in: enabling this requires TWINGATE_API_KEY in the environment.
+    # TwingateEventSource.from_config() raises at startup without it, which
+    # would turn the overlay into a crash loop. Set this to `true` after
+    # provisioning the API key in .env (see .env.twingate.example).
+    enabled: false
+    poll_interval_seconds: 30
+    ingest_network_events: true
+    ingest_posture_failures: true
+    severity_map:
+      access_denied: "warning"
+      posture_check_failed: "warning"
+      jit_request_denied: "info"
+      connector_offline: "critical"
+
+# ---------------------------------------------------------------------------
+# Anomaly / vibration / camera / shift_report blocks (unchanged)
+# ---------------------------------------------------------------------------
+anomaly_detection:
+  learning_period_hours: 72
+  z_score_thresholds:
+    warning: 2.0
+    critical: 3.0
+    emergency: 4.0
+  correlation_window_minutes: 30
+  rebase_trigger_false_positives: 5
+
+vibration_baseline:
+  sampling:
+    rate_hz: 3200
+    window_seconds: 2
+    windows_per_average: 5
+  fft:
+    max_frequency_hz: 1600
+    window_function: "hanning"
+  trending:
+    rolling_windows: [7, 14, 30]
+
+camera_monitor:
+  motion_detection:
+    background_history: 500
+    variance_threshold: 50
+    shadow_detection: true
+  yolo:
+    model: "yolov8n.pt"
+    confidence_threshold: 0.5
+    target_classes: ["person", "truck", "car", "motorcycle", "bus"]
+  archival:
+    clip_before_seconds: 30
+    clip_after_seconds: 120
+    retention_days: 14
+    storage_path: "/data/footage/"
+
+shift_report:
+  schedule:
+    shift_change_report: true
+    daily_summary_hour: 22
+    weekly_digest_day: "monday"
+  delivery:
+    shift_handover: ["telegram", "slack"]
+    daily_summary: ["email"]
+    weekly_digest: ["email", "slack"]
+  # NEW: include a "Twingate access summary" section in the shift handover
+  # — who accessed which machine, how long, and any posture failures.
+  twingate_summary:
+    enabled: true
+    sections:
+      - "access_log_top_10"
+      - "posture_failures"
+      - "connector_uptime"
+      - "off_hours_access_attempts"
