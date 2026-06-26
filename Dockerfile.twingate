@@ -1,0 +1,73 @@
+# =============================================================================
+# Dockerfile (Twingate-extended) — drop-in replacement for the repo's Dockerfile
+# -----------------------------------------------------------------------------
+# The ONLY changes from the original Dockerfile are:
+#   1. COPY scripts/entrypoint.sh and chmod +x it
+#   2. Change CMD from the hermes command to the entrypoint wrapper
+#
+# The wrapper starts the Twingate poller as a background sidecar (if
+# TWINGATE_NETWORK + TWINGATE_API_KEY are set and the config flag is true),
+# then execs the original hermes command.
+#
+# Diff from upstream:
+#   + COPY scripts/entrypoint.sh /app/scripts/entrypoint.sh
+#   + RUN chmod +x /app/scripts/entrypoint.sh
+#   - CMD ["hermes", "--skills", "./hermes_skills/", "--config", "./config/factory_config.yaml"]
+#   + ENTRYPOINT ["/app/scripts/entrypoint.sh"]
+#   + CMD ["hermes", "--skills", "./hermes_skills/", "--config", "./config/factory_config.yaml"]
+# =============================================================================
+
+FROM python:3.11-slim-bookworm
+
+# System dependencies for Raspberry Pi sensor libraries
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3-dev \
+    libgpiod2 \
+    i2c-tools \
+    spi-tools \
+    libopencv-dev \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy requirements and install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY . .
+
+# Create data directories (also used by the Twingate poller for state + logs)
+RUN mkdir -p /data/footage /data/reports /app/data
+
+# Make the entrypoint wrapper executable
+RUN chmod +x /app/scripts/entrypoint.sh
+
+# Environment
+ENV PYTHONPATH=/app \
+    PYTHONUNBUFFERED=1 \
+    FOOTAGE_PATH=/data/footage \
+    REPORTS_PATH=/data/reports \
+    TWINGATE_POLL_LOG=/app/data/twingate_poller.log \
+    TWINGATE_STATE_PATH=/app/data/twingate_poll_state.json
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+    CMD python -c "import src.sensors.gpio_reader; print('OK')" || exit 1
+
+# --- Twingate wiring ---------------------------------------------------------
+# The entrypoint script is the PID 1 process. It:
+#   1. Reads .env (passed via docker-compose environment: block)
+#   2. If TWINGATE_NETWORK + TWINGATE_API_KEY are set AND the config flag is
+#      true, starts `python -m src.twingate --watch` as a background process
+#   3. Traps SIGTERM/SIGINT to kill the poller cleanly
+#   4. execs the original CMD (hermes --skills ... --config ...)
+#
+# If Twingate env vars are absent, the wrapper logs a warning and continues
+# to Hermes — Twingate remains fully opt-in.
+ENTRYPOINT ["/app/scripts/entrypoint.sh"]
+
+# Original CMD, unchanged
+CMD ["hermes", "--skills", "./hermes_skills/", "--config", "./config/factory_config.yaml"]
