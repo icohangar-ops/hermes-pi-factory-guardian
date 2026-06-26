@@ -18,6 +18,11 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover - python < 3.9 fallback
+    ZoneInfo = None  # type: ignore[assignment]
+
 from .client import TwingateClient, _parse_dt
 
 logger = logging.getLogger(__name__)
@@ -129,13 +134,23 @@ def build_twingate_summary(
 
 def _in_any_jit_window(iso_ts: Optional[str], windows: Dict[str, str], tz: str) -> bool:
     """Return True if the timestamp falls inside any of the configured
-    shift windows (e.g. {"day_shift": "06:00-14:00", ...})."""
+    shift windows (e.g. {"day_shift": "06:00-14:00", ...}).
+
+    The `tz` argument is the configured shift timezone (IANA name, e.g.
+    "America/New_York"). Without converting, a 06:00-14:00 New York window
+    would match 06:00 UTC = 02:00 NY — silently misclassifying every event
+    on non-UTC sites.
+    """
     if not iso_ts or not windows:
         return False
     try:
         ts = _parse_dt(iso_ts)
-        # Convert to shift tz would need zoneinfo; keep UTC for simplicity
-        # unless tz is UTC. Most factories run a single tz; acceptable loss.
+        if tz and tz.upper() != "UTC" and ZoneInfo is not None:
+            try:
+                ts = ts.astimezone(ZoneInfo(tz))
+            except Exception:
+                # Fall back to UTC if the tz string is unknown; logged once.
+                logger.warning("Unknown JIT timezone %r; comparing in UTC", tz)
         hhmm = ts.strftime("%H:%M")
         for window in windows.values():
             if "-" in window:

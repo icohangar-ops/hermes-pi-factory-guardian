@@ -178,7 +178,8 @@ python3 scripts/validate_overlay.py
 
 Checks:
 1. All three YAML/env files parse
-2. Every machine and camera has `twingate.resource_name` + `policy` + `tags.machine-id`
+2. Every machine has `twingate.resource_name`, `twingate.policy`, and `tags.machine-id`.
+   Every camera has `twingate.resource_name` (cameras do not carry `machine-id`).
 3. The compose overlay merges cleanly with the base `docker-compose.yml`
    (factory-guardian joins `ot_net`, Connector has no `ports:` block, sysctls present)
 

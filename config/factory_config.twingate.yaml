@@ -107,7 +107,7 @@ twingate:
     export_to_s3: true
     s3_bucket: "factory-${FACTORY_NAME}-twingate-audit"
     s3_prefix: "line-${FACTORY_LINE}/"
-    region: "us-east-1"
+    region: "${AWS_REGION}"
     retention_days: 365
     include_network_events: true     # per-connection flow records
     include_admin_console_events: true
@@ -166,8 +166,8 @@ cameras:
       protocol: "rtsp"                  # rtsp | http | onvif
       port: 554
       tags:
-        factory: "factory-a"
-        line: "line-1"
+        factory: "${FACTORY_NAME}"
+        line: "${FACTORY_LINE}"
         zone: "cnc-north"
         classification: "restricted"    # restricted | internal | public
       policy: "policy-restricted-footage"
@@ -190,8 +190,8 @@ cameras:
       protocol: "rtsp"
       port: 554
       tags:
-        factory: "factory-a"
-        line: "line-1"
+        factory: "${FACTORY_NAME}"
+        line: "${FACTORY_LINE}"
         zone: "loading-dock"
         classification: "internal"
       policy: "policy-internal-footage"
@@ -238,8 +238,8 @@ machines:
       protocol: "http"
       port: 8080
       tags:
-        factory: "factory-a"
-        line: "line-1"
+        factory: "${FACTORY_NAME}"
+        line: "${FACTORY_LINE}"
         machine-id: "cnc_mill_01"
         machine-type: "cnc_mill"
         classification: "restricted"
@@ -288,8 +288,8 @@ machines:
       protocol: "http"
       port: 8080
       tags:
-        factory: "factory-a"
-        line: "line-1"
+        factory: "${FACTORY_NAME}"
+        line: "${FACTORY_LINE}"
         machine-id: "cnc_mill_02"
         machine-type: "cnc_mill"
         classification: "restricted"
@@ -325,8 +325,8 @@ machines:
       protocol: "http"
       port: 8080
       tags:
-        factory: "factory-a"
-        line: "line-1"
+        factory: "${FACTORY_NAME}"
+        line: "${FACTORY_LINE}"
         machine-id: "conveyor_a"
         machine-type: "conveyor"
         classification: "internal"
@@ -364,8 +364,8 @@ machines:
       protocol: "http"
       port: 8080
       tags:
-        factory: "factory-a"
-        line: "line-1"
+        factory: "${FACTORY_NAME}"
+        line: "${FACTORY_LINE}"
         machine-id: "press_brake_01"
         machine-type: "press_brake"
         classification: "restricted"
@@ -439,7 +439,11 @@ alert_routing:
   # the same dispatcher handles "bearing wear detected" and "contractor
   # denied access to press_brake_01 outside JIT window".
   twingate_event_source:
-    enabled: true
+    # Opt-in: enabling this requires TWINGATE_API_KEY in the environment.
+    # TwingateEventSource.from_config() raises at startup without it, which
+    # would turn the overlay into a crash loop. Set this to `true` after
+    # provisioning the API key in .env (see .env.twingate.example).
+    enabled: false
     poll_interval_seconds: 30
     ingest_network_events: true
     ingest_posture_failures: true

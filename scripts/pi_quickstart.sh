@@ -20,7 +20,9 @@ set -euo pipefail
 # --- Defaults -----------------------------------------------------------------
 REPO="https://github.com/icohangar-ops/hermes-pi-factory-guardian.git"
 CLONE_DIR="${CLONE_DIR:-/home/pi/hermes-pi-factory-guardian}"
-OVERLAY_DIR="${OVERLAY_DIR:-/home/z/my-project/download}"
+# Overlay files live inside the cloned checkout; the older default pointed
+# at the author's workstation and broke quickstart on a fresh Pi.
+OVERLAY_DIR="${OVERLAY_DIR:-$CLONE_DIR}"
 
 TWINGATE_NETWORK=""
 TWINGATE_ACCESS_TOKEN=""
@@ -69,8 +71,16 @@ fi
 # --- Interactive prompts ------------------------------------------------------
 if [[ $INTERACTIVE -eq 1 ]]; then
   [[ -z "$TWINGATE_NETWORK" ]]      && read -rp "Twingate network slug (e.g. acme for acme.twingate.com): " TWINGATE_NETWORK
-  [[ -z "$TWINGATE_ACCESS_TOKEN" ]] && read -rp "Twingate access token (generate in Admin Console): " TWINGATE_ACCESS_TOKEN
-  [[ -z "$TWINGATE_REFRESH_TOKEN" ]] && read -rp "Twingate refresh token: " TWINGATE_REFRESH_TOKEN
+  # Tokens are secrets — read silently so they don't end up in shared shells,
+  # screen recordings, or terminal scrollback.
+  if [[ -z "$TWINGATE_ACCESS_TOKEN" ]]; then
+    read -rsp "Twingate access token (generate in Admin Console): " TWINGATE_ACCESS_TOKEN
+    printf '\n'
+  fi
+  if [[ -z "$TWINGATE_REFRESH_TOKEN" ]]; then
+    read -rsp "Twingate refresh token: " TWINGATE_REFRESH_TOKEN
+    printf '\n'
+  fi
   read -rp "Factory name [${FACTORY_NAME}]: " i; FACTORY_NAME="${i:-$FACTORY_NAME}"
   read -rp "Line name    [${FACTORY_LINE}]: " i; FACTORY_LINE="${i:-$FACTORY_LINE}"
 fi
@@ -100,7 +110,7 @@ cp -v "$OVERLAY_DIR/docker-compose.twingate.yml" ./docker-compose.twingate.yml
 if [[ ! -f config/factory_config.yaml.orig ]]; then
   cp config/factory_config.yaml config/factory_config.yaml.orig
 fi
-cp -v "$OVERLAY_DIR/factory_config.twingate.yaml" config/factory_config.yaml
+cp -v "$OVERLAY_DIR/config/factory_config.twingate.yaml" config/factory_config.yaml
 
 # 3) .env extension
 if [[ ! -f .env ]]; then

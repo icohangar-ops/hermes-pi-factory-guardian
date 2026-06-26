@@ -28,11 +28,21 @@ def start_twingate_event_source(
     Returns the started source (so the caller can `.stop()` it on shutdown),
     or None if disabled / misconfigured.
     """
+    # Mirror the lookup TwingateEventSource.from_config() does: try the
+    # nested twingate.alert_routing.* path first, then fall back to the
+    # top-level alert_routing.twingate_event_source path that the shipped
+    # factory_config.twingate.yaml actually uses. Without this fallback the
+    # helper logs "disabled" and skips an enabled poller.
     src_cfg = (
         factory_config.get("twingate", {})
         .get("alert_routing", {})
         .get("twingate_event_source", {})
     )
+    if not src_cfg:
+        src_cfg = (
+            factory_config.get("alert_routing", {})
+            .get("twingate_event_source", {})
+        )
     if not src_cfg.get("enabled", False):
         logger.info("Twingate event source disabled; skipping")
         return None

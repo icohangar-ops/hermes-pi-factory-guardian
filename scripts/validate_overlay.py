@@ -1,18 +1,23 @@
 #!/usr/bin/env python3
 """Validate the Twingate overlay: YAML parses, compose merges, schema is sane."""
 import sys, subprocess, tempfile, os, shutil
+from pathlib import Path
 
 try:
     import yaml
 except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "PyYAML"])
-    import yaml
+    raise SystemExit(
+        "PyYAML is required to run this validator. Install it first, e.g. "
+        "`pip install PyYAML` (or `pip install -r requirements.txt`)."
+    )
 
-DL = "/home/z/my-project/download"
-BASE_COMPOSE = "/home/z/my-project/orig_docker-compose.yml"     # fetched earlier
-OVERLAY      = f"{DL}/docker-compose.twingate.yml"
-CONFIG       = f"{DL}/factory_config.twingate.yaml"
-ENV_EXAMPLE  = f"{DL}/.env.twingate.example"
+# Resolve paths relative to the repo root so this script works on a fresh
+# checkout (CI, Pi, anyone's laptop) without environment-specific paths.
+ROOT         = Path(__file__).resolve().parents[1]
+BASE_COMPOSE = str(ROOT / "docker-compose.yml")
+OVERLAY      = str(ROOT / "docker-compose.twingate.yml")
+CONFIG       = str(ROOT / "config" / "factory_config.twingate.yaml")
+ENV_EXAMPLE  = str(ROOT / ".env.twingate.example")
 
 print("=" * 70)
 print("1) YAML parse checks")

@@ -98,16 +98,23 @@ def main() -> int:
     log.info("Loading config from %s", config_path)
     factory_config = _load_config(str(config_path))
 
-    # Check the feature flag in config
+    # Check the feature flag in config. Accept either placement — nested
+    # under twingate.alert_routing or top-level alert_routing — so this
+    # matches TwingateEventSource.from_config()'s lookup.
     src_cfg = (
         factory_config.get("twingate", {})
         .get("alert_routing", {})
         .get("twingate_event_source", {})
     )
+    if not src_cfg:
+        src_cfg = (
+            factory_config.get("alert_routing", {})
+            .get("twingate_event_source", {})
+        )
     if not src_cfg.get("enabled", False):
         log.error(
             "Twingate event source is disabled in config "
-            "(twingate.alert_routing.twingate_event_source.enabled=false). "
+            "(alert_routing.twingate_event_source.enabled=false). "
             "Nothing to do."
         )
         return 4
@@ -132,7 +139,7 @@ def main() -> int:
         log.error("Failed to initialize TwingateEventSource: %s", e)
         return 7
 
-    if args.interval:
+    if args.interval is not None:
         source.poll_interval = max(5, args.interval)
 
     # --- Wire poller -> dispatcher ---
@@ -155,8 +162,8 @@ def main() -> int:
     )
     source.start(_on_event)
 
-    stop = signal.Event() if hasattr(signal, "Event") else None
-    # signal.Event() doesn't exist; use a simple flag + signal handler
+    # Plain dict-as-flag so the signal handler can mutate shared state without
+    # needing a Lock — set ops are atomic enough for a single boolean.
     _stop_flag = {"stop": False}
 
     def _handle_signal(signum, _frame):

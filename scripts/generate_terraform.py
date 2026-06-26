@@ -122,6 +122,30 @@ def gen_connector(rn_ref: str, conn_name: str, labels: Dict[str, str]) -> str:
     return hcl_block(f'resource "twingate_connector" "{name}"', body)
 
 
+_PORT_SUFFIX_RE = re.compile(r":(\d+)$")
+
+
+def _split_host_port(address: str, port: int) -> tuple[str, int]:
+    """Split a possibly-host:port address into (host, port).
+
+    The Twingate provider's `twingate_resource.address` accepts only an
+    IP/CIDR/FQDN — never `host:port`. If the input carries a trailing port,
+    strip it; if both an inline port and the `port` argument are present,
+    they must agree.
+    """
+    m = _PORT_SUFFIX_RE.search(address)
+    if not m:
+        return address, port
+    inline_port = int(m.group(1))
+    host = address[: m.start()]
+    if port and port != inline_port:
+        raise ValueError(
+            f"Address {address!r} embeds port {inline_port} which conflicts "
+            f"with explicit port {port}"
+        )
+    return host, inline_port
+
+
 def gen_resource(
     res_name: str,
     address: str,
@@ -132,7 +156,8 @@ def gen_resource(
     remote_network_id_ref: str,
 ) -> str:
     name = tf_safe(res_name)
-    # Twingate resource: address can be IP/CIDR/FQDN. We default to FQDN.
+    # Twingate resource: address must be IP/CIDR/FQDN — never host:port.
+    address, port = _split_host_port(address, port)
     body: List[str] = [
         f'name              = {hcl_string(res_name)}',
         f'address           = {hcl_string(address)}',
@@ -179,7 +204,7 @@ def gen_security_policy(
         for g in allowed_groups:
             body.append(f"  {g},")
         body.append("]")
-    body.append(f"requires_mfa = {"true" if require_mfa else "false"}")
+    body.append(f"requires_mfa = {'true' if require_mfa else 'false'}")
     return hcl_block(f'resource "twingate_security_policy" "{n}"', body)
 
 
@@ -263,8 +288,28 @@ def generate(config: Dict[str, Any], out_dir: str) -> Dict[str, str]:
     )
 
     # Collect every distinct policy name referenced by machines/cameras.
+    # When multiple assets share a policy, we MERGE conservatively:
+    #   require_mfa = any(assets)              (one MFA-requiring asset wins)
+    #   allowed_groups = union(assets)         (no asset's groups silently dropped)
+    # This avoids iteration-order surprises where a later entry could drop MFA
+    # or rewrite the group set for every resource bound to the same policy.
     policies: Dict[str, Dict[str, Any]] = {}
     resources: List[Dict[str, Any]] = []
+
+    def _merge_policy(name: str, allowed_groups: List[str], require_mfa: bool) -> None:
+        existing = policies.get(name)
+        if existing is None:
+            policies[name] = {
+                "allowed_groups": list(dict.fromkeys(allowed_groups)),
+                "require_mfa": bool(require_mfa),
+            }
+            return
+        merged_groups = list(existing["allowed_groups"])
+        for g in allowed_groups:
+            if g not in merged_groups:
+                merged_groups.append(g)
+        existing["allowed_groups"] = merged_groups
+        existing["require_mfa"] = bool(existing["require_mfa"] or require_mfa)
 
     for m in config.get("machines", []):
         sub = m.get("twingate", {})
@@ -283,10 +328,11 @@ def generate(config: Dict[str, Any], out_dir: str) -> Dict[str, str]:
             "require_mfa": sub.get("jit_access", {}).get("require_mfa", False),
         })
         if sub.get("policy"):
-            policies[sub["policy"]] = {
-                "allowed_groups": sub.get("jit_access", {}).get("allowed_groups", []),
-                "require_mfa": sub.get("jit_access", {}).get("require_mfa", False),
-            }
+            _merge_policy(
+                sub["policy"],
+                sub.get("jit_access", {}).get("allowed_groups", []),
+                sub.get("jit_access", {}).get("require_mfa", False),
+            )
 
     for c in config.get("cameras", []):
         sub = c.get("twingate", {})
@@ -305,10 +351,11 @@ def generate(config: Dict[str, Any], out_dir: str) -> Dict[str, str]:
             "require_mfa": sub.get("jit_access", {}).get("require_mfa", False),
         })
         if sub.get("policy"):
-            policies.setdefault(sub["policy"], {
-                "allowed_groups": sub.get("jit_access", {}).get("allowed_groups", []),
-                "require_mfa": sub.get("jit_access", {}).get("require_mfa", False),
-            })
+            _merge_policy(
+                sub["policy"],
+                sub.get("jit_access", {}).get("allowed_groups", []),
+                sub.get("jit_access", {}).get("require_mfa", False),
+            )
 
     # --- Emit HCL ---
     blocks: List[str] = []
@@ -355,10 +402,17 @@ def generate(config: Dict[str, Any], out_dir: str) -> Dict[str, str]:
             for r in resources
             if r.get("policy") == pname
         ]
+        missing_groups = sorted(set(pinfo["allowed_groups"]) - set(idp_groups))
+        if missing_groups:
+            raise ValueError(
+                f"Policy {pname!r} references unknown group aliases: "
+                f"{', '.join(missing_groups)}. Add them under "
+                f"twingate.identity_provider.groups or remove them from "
+                f"jit_access.allowed_groups."
+            )
         bound_groups = [
             group_tf_refs[idp_groups[g]]
             for g in pinfo["allowed_groups"]
-            if g in idp_groups
         ]
         blocks.append(gen_security_policy(
             policy_name=pname,

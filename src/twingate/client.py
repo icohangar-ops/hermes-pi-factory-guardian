@@ -37,6 +37,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -48,6 +49,11 @@ logger = logging.getLogger(__name__)
 
 # GraphQL endpoint shape: https://<network>.twingate.com/api/graphql/
 GRAPHQL_URL_TEMPLATE = "https://{network}.twingate.com/api/graphql/"
+
+# Twingate network slugs are DNS-label-shaped: lowercase alnum + dashes, no
+# leading/trailing dash. Validate this before formatting into the URL so a
+# value like `evil.example/path` cannot redirect the API call.
+_NETWORK_SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 
 
 # ---------------------------------------------------------------------------
@@ -144,7 +150,13 @@ class TwingateClient:
     def __init__(self, network: str, api_key: str, timeout: int = 15):
         if not network or not api_key:
             raise ValueError("TWINGATE_NETWORK and TWINGATE_API_KEY are required")
-        self.url = GRAPHQL_URL_TEMPLATE.format(network=network)
+        network_slug = network.strip().lower()
+        if not _NETWORK_SLUG_RE.fullmatch(network_slug):
+            raise ValueError(
+                f"TWINGATE_NETWORK must be a Twingate network slug "
+                f"(e.g. 'acme' for acme.twingate.com), got {network!r}"
+            )
+        self.url = GRAPHQL_URL_TEMPLATE.format(network=network_slug)
         self.api_key = api_key
         self.timeout = timeout
 
@@ -339,8 +351,11 @@ def _check_connectors(
         state = (node.get("state") or "").lower()
         if state in ("offline", "error", "disabled"):
             severity = _severity_for("connector_offline", severity_map_override)
+            # Stable alert_id per connector — otherwise every poll while the
+            # connector is offline emits a new alert and floods the dispatcher.
+            # Downstream merge_window dedupe relies on this being constant.
             out.append({
-                "alert_id": f"tg-conn-{node['id']}-{int(now.timestamp())}",
+                "alert_id": f"tg-conn-{node['id']}-offline",
                 "severity": severity.value,
                 "machine_id": "twingate",
                 "description": (
@@ -446,11 +461,33 @@ class TwingateEventSource:
         while not self._stop.is_set():
             try:
                 for event in self.poll_once():
+                    eid = (event.get("sensor_data") or {}).get(
+                        "twingate_activity_id"
+                    )
+                    occurred = (event.get("sensor_data") or {}).get(
+                        "occurred_at"
+                    )
                     try:
                         callback(event)
                     except Exception as e:
-                        logger.error("Callback failed for Twingate event %s: %s",
-                                     event.get("alert_id"), e)
+                        # Do NOT mark this event as seen — leave it retryable
+                        # on the next poll cycle.
+                        logger.error(
+                            "Callback failed for Twingate event %s: %s",
+                            event.get("alert_id"), e,
+                        )
+                        continue
+                    # Acknowledge only on successful dispatch.
+                    if eid:
+                        self._state.seen_event_ids.add(eid)
+                    if occurred:
+                        self._state.cursor_iso = occurred
+                # Cap the seen set so it doesn't grow unboundedly across months.
+                if len(self._state.seen_event_ids) > 10_000:
+                    self._state.seen_event_ids = set(
+                        list(self._state.seen_event_ids)[-5_000:]
+                    )
+                _save_state(self._state)
             except Exception as e:
                 logger.error("Twingate poll cycle failed: %s", e)
             self._stop.wait(self.poll_interval)
@@ -473,49 +510,60 @@ class TwingateEventSource:
         return events
 
     def _poll_activities(self) -> List[Dict[str, Any]]:
-        variables: Dict[str, Any] = {"first": 50, "after": None}
-        if self.remote_network_id:
-            variables["filter"] = {"remoteNetworkId": self.remote_network_id}
-
-        try:
-            data = self.client.execute(ACTIVITIES_QUERY, variables)
-        except Exception as e:
-            logger.warning("Activities query failed: %s", e)
-            return []
-
+        # Page through the activity log until there are no more new pages.
+        # Without this, > 50 events between polls silently drop on the floor.
         out: List[Dict[str, Any]] = []
-        activity_data = data.get("activities", {})
-        page_info = activity_data.get("pageInfo", {})
-        edges = activity_data.get("edges", [])
+        after: Optional[str] = None
+        total_seen = 0
+        # Bound the per-cycle work so a single bad polling window can't pin
+        # the thread forever. 20 pages * 50 = 1000 events / cycle is plenty.
+        max_pages = 20
 
-        for edge in edges:
-            node = edge.get("node") or {}
-            eid = node.get("id")
-            if not eid or eid in self._state.seen_event_ids:
-                continue
+        for _ in range(max_pages):
+            variables: Dict[str, Any] = {"first": 50, "after": after}
+            if self.remote_network_id:
+                variables["filter"] = {"remoteNetworkId": self.remote_network_id}
 
-            key = _classify(node.get("activityType", ""))
-            # Honor ingest flags
-            if key.startswith("posture") and not self.ingest_posture_failures:
-                continue
-            if not key.startswith("posture") and not self.ingest_network_events:
-                continue
+            try:
+                data = self.client.execute(ACTIVITIES_QUERY, variables)
+            except Exception as e:
+                logger.warning("Activities query failed: %s", e)
+                break
 
-            severity = _severity_for(key, self.severity_map_override)
-            out.append(_build_alert_event(node, severity))
-            self._state.seen_event_ids.add(eid)
-            occurred = node.get("occurredAt")
-            if occurred:
-                self._state.cursor_iso = occurred
+            activity_data = data.get("activities", {})
+            page_info = activity_data.get("pageInfo", {})
+            edges = activity_data.get("edges", [])
+            total_seen += len(edges)
 
-        # Cap the seen set so it doesn't grow unboundedly across months.
-        if len(self._state.seen_event_ids) > 10_000:
-            self._state.seen_event_ids = set(
-                list(self._state.seen_event_ids)[-5_000:]
-            )
+            for edge in edges:
+                node = edge.get("node") or {}
+                eid = node.get("id")
+                if not eid or eid in self._state.seen_event_ids:
+                    continue
 
-        _save_state(self._state)
-        logger.info("Twingate poll: %d new events (page_info=%s)", len(out), page_info)
+                key = _classify(node.get("activityType", ""))
+                # Honor ingest flags
+                if key.startswith("posture") and not self.ingest_posture_failures:
+                    continue
+                if not key.startswith("posture") and not self.ingest_network_events:
+                    continue
+
+                severity = _severity_for(key, self.severity_map_override)
+                out.append(_build_alert_event(node, severity))
+                # NOTE: ack happens in _run() AFTER successful dispatch.
+
+            if not page_info.get("hasNextPage"):
+                break
+            next_cursor = page_info.get("endCursor")
+            if not next_cursor or next_cursor == after:
+                # Defensive: server says hasNextPage but didn't advance.
+                break
+            after = next_cursor
+
+        logger.info(
+            "Twingate poll: %d new events across %d activity edges",
+            len(out), total_seen,
+        )
         return out
 
 

@@ -39,8 +39,20 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Create data directories (also used by the Twingate poller for state + logs)
-RUN mkdir -p /data/footage /data/reports /app/data
+# Create a dedicated non-root user (addresses Trivy DS-0002). The user is
+# pre-joined to the conventional Raspberry Pi gpio/i2c/spi/dialout groups so
+# bind-mounted /dev/{gpiomem,i2c-*,spi*} devices remain accessible. If the
+# host uses non-default GIDs, override with `group_add:` in docker-compose.
+RUN groupadd --system --gid 997 gpio || true \
+ && groupadd --system --gid 998 i2c  || true \
+ && groupadd --system --gid 999 spi  || true \
+ && useradd  --system --uid 1000 --gid 1000 --create-home --shell /bin/bash hermes \
+ && usermod -aG gpio,i2c,spi,dialout hermes
+
+# Create data directories owned by the hermes user (also used by the Twingate
+# poller for state + logs).
+RUN mkdir -p /data/footage /data/reports /app/data \
+ && chown -R hermes:hermes /data /app
 
 # Make the entrypoint wrapper executable
 RUN chmod +x /app/scripts/entrypoint.sh
@@ -52,6 +64,10 @@ ENV PYTHONPATH=/app \
     REPORTS_PATH=/data/reports \
     TWINGATE_POLL_LOG=/app/data/twingate_poller.log \
     TWINGATE_STATE_PATH=/app/data/twingate_poll_state.json
+
+# Drop privileges. Override at runtime with `--user root` if a deployment
+# genuinely needs root for some host-specific reason.
+USER hermes
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \

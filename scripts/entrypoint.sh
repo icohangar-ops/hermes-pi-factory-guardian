@@ -42,9 +42,14 @@ if [[ -n "${TWINGATE_NETWORK:-}" && -n "${TWINGATE_API_KEY:-}" ]]; then
         #       twingate_event_source:
         #         enabled: true
         # We do a conservative substring check; if it's not present we skip.
+        # Fast-path: grep within a wide-enough window after the block header
+        # so reordered YAML keys / interleaved comments don't fool the check.
+        # `from_config()` in src/twingate/client.py is the authoritative parse;
+        # this is only an early bail-out so we don't spawn the poller when it
+        # would obviously refuse to start.
         if grep -q "twingate_event_source:" "$CONFIG_PATH" 2>/dev/null \
-           && grep -A3 "twingate_event_source:" "$CONFIG_PATH" 2>/dev/null \
-              | grep -q "enabled: true"; then
+           && grep -A20 "twingate_event_source:" "$CONFIG_PATH" 2>/dev/null \
+              | grep -E -q "^\s*enabled:\s*true\b"; then
             START_POLLER=1
         else
             warn "twingate_event_source.enabled is not true in $CONFIG_PATH — skipping poller"
@@ -76,7 +81,14 @@ else
 fi
 
 # --- Signal handling ---------------------------------------------------------
-# Forward SIGTERM/SIGINT to the poller, then to Hermes (which we exec below).
+# We must NOT `exec` Hermes — `exec` replaces this shell, dropping every trap
+# we register. After `exec`, signals would go straight to Hermes and the
+# poller would never get its 5s SIGTERM window to flush state.
+#
+# Instead: start Hermes as a child, forward SIGTERM/SIGINT to both Hermes and
+# the poller, then `wait` so this shell stays PID 1.
+HERMES_PID=""
+
 cleanup() {
     if [[ -f "$POLL_PIDFILE" ]]; then
         local pid
@@ -94,11 +106,30 @@ cleanup() {
         rm -f "$POLL_PIDFILE"
     fi
 }
-trap cleanup TERM INT
 
-# --- Exec Hermes -------------------------------------------------------------
-# Replace this shell with the Hermes agent so it becomes PID 1 and receives
-# signals directly. The cleanup trap fires before exec replaces us, so the
-# poller gets a clean SIGTERM first.
+forward_signal() {
+    local sig="$1"
+    if [[ -n "$HERMES_PID" ]] && kill -0 "$HERMES_PID" 2>/dev/null; then
+        log "Forwarding SIG${sig} to Hermes (pid=$HERMES_PID)"
+        kill -"$sig" "$HERMES_PID" 2>/dev/null || true
+    fi
+    cleanup
+}
+
+trap 'forward_signal TERM' TERM
+trap 'forward_signal INT'  INT
+
+# --- Run Hermes --------------------------------------------------------------
+# Hermes runs as a child of this shell so the traps above stay installed and
+# `cleanup` can stop the poller gracefully before the container tears down.
 log "Starting Hermes agent: $*"
-exec "$@"
+"$@" &
+HERMES_PID=$!
+
+# `wait` is interruptible by the trapped signals; once Hermes exits (either
+# normally or via a forwarded SIGTERM), run cleanup one more time and exit
+# with Hermes's status so `docker stop` returns the right code.
+wait "$HERMES_PID"
+HERMES_STATUS=$?
+cleanup
+exit "$HERMES_STATUS"
