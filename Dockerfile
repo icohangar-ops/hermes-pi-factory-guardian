@@ -20,14 +20,27 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Create data directories
-RUN mkdir -p /data/footage /data/reports
+# Non-root user (Aikido: container must not run as root). Pre-join conventional
+# Raspberry Pi gpio/i2c/spi/dialout groups so bind-mounted devices stay usable.
+# If the host uses non-default GIDs, override with `group_add:` in compose.
+RUN groupadd --system --gid 1000 hermes \
+ && (groupadd --system --gid 997 gpio || true) \
+ && (groupadd --system --gid 998 i2c  || true) \
+ && (groupadd --system --gid 999 spi  || true) \
+ && useradd  --system --uid 1000 --gid hermes --create-home --shell /bin/bash hermes \
+ && usermod -aG gpio,i2c,spi,dialout hermes \
+ && mkdir -p /data/footage /data/reports \
+ && chown -R hermes:hermes /data /app
 
 # Environment
 ENV PYTHONPATH=/app \
     PYTHONUNBUFFERED=1 \
     FOOTAGE_PATH=/data/footage \
     REPORTS_PATH=/data/reports
+
+# Drop privileges before HEALTHCHECK / CMD. Override at runtime with
+# `--user root` only if a host-specific setup genuinely needs it.
+USER hermes
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
