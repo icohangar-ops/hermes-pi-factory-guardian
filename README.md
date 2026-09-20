@@ -213,3 +213,11 @@ MIT License — see [LICENSE](LICENSE) for details.
 - [Ultralytics YOLOv8](https://github.com/ultralytics/ultralytics) for edge-optimized object detection
 - [OpenCV](https://opencv.org/) for computer vision
 - [Raspberry Pi Foundation](https://www.raspberrypi.org/) for the hardware platform
+
+## Propagation decisions (SecOps/Gov wave C)
+
+### Row 17 — ReBAC gateway: REVERSED (verified against current state)
+
+There is no subject population to gateway. The only identity surfaces in the code are SMTP transport credentials — `self.smtp_user = os.environ.get("SMTP_USER", "")` through `server.login(self.smtp_user, self.smtp_pass)` (src/alert/dispatcher.py:255-295) — which authenticate this tool to its mail relay, not a user to this tool. No user, role, or tenant model exists anywhere in the tree: alerts dispatch on sensor/camera state to a single operator. A ReBAC gateway guards a population of subjects; here that population is one.
+
+**Revisit trigger:** the tool gains a second human subject (multi-operator alert acks, role-differentiated dashboards). Then adopt the canonical ReBAC gateway rather than stacking ad-hoc role checks.
