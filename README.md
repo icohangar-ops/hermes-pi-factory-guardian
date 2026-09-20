@@ -15,13 +15,13 @@ The system combines computer vision (OpenCV + YOLOv8-nano) with physical sensor 
 
 ### Key Features
 
-- **Self-Learning Anomaly Detection**: Hermes creates and refines detection skills from every incident, improving accuracy over time
-- **Multi-Modal Monitoring**: Camera feeds + vibration sensors + temperature + current draw analyzed together
-- **Real-Time Vision Pipeline**: OpenCV motion detection with YOLOv8-nano object classification
-- **Smart Alert Routing**: Context-aware escalation via Telegram, Slack, email, and local buzzer
-- **Shift Reports**: Automated daily summaries with trend analysis and anomaly timeline
-- **Offline-Capable**: Full operation without internet; syncs skills and reports when connected
-- **Edge-Optimized**: Runs entirely on Pi 5 with Coral TPU acceleration
+- **Self-Learning Anomaly Detection**: Hermes creates and refines detection skills from every incident, improving accuracy over time (`skills/anomaly-detection/anomaly_detector.py`, `skills/learning-loop/learning_manager.py`)
+- **Multi-Modal Monitoring**: Camera feeds + vibration sensors + temperature + current draw analyzed together (`src/camera/capture.py`, `src/sensors/gpio_reader.py`)
+- **Real-Time Vision Pipeline**: OpenCV motion detection with YOLOv8-nano object classification (`src/vision/detector.py`)
+- **Smart Alert Routing**: Context-aware escalation via Telegram, Slack, email, and local buzzer (`skills/alert-router/alert_router.py`, `src/alert/dispatcher.py`)
+- **Shift Reports**: Automated daily summaries with trend analysis and anomaly timeline (`skills/shift-report/shift_reporter.py`)
+- **Offline-Capable**: Detection, alerting, and skill/report storage run locally — skills and shift reports persist on-device (`skills/learning-loop/learning_manager.py`); the optional Twingate event source (`src/twingate/client.py`) requires connectivity
+- **Edge-Optimized**: Runs entirely on Pi 5, with optional Coral TPU acceleration in the vision pipeline (`src/vision/detector.py`)
 
 ## Architecture
 
